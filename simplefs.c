@@ -113,7 +113,7 @@ static void sf_init(const SimpleFS *fs) {
 		memset(s->blocks[i].raw, 0, BLOCK_SIZE); // clears out fileheaders
 	} // master fileheader already set 
 	// set master directory entry
-	DirEntry master = {"mstdir", 0};
+	DirEntry master = {"(dir)\0", 0};
 	s->blocks[MST_DIR_ENTRIES].des[0] = master;
 	s->blocks[1].fhs[0].index_block = MST_INDEX_BLOCK;	
 	// link blocks
@@ -184,8 +184,9 @@ static bool sf_create(const SimpleFS *fs, char *name) {
 	fh->index_block = get_next_fbl(s); // assign index block
 	de->fileid = fh_fileid; // set fileid in directory entry
 	memset(s->blocks + fh->index_block, 0, BLOCK_SIZE); // clear index block
-	memcpy(de->name, name, 6); // set name of directory entry
-	
+	memcpy(de->name, name, 5); // set name of directory entry
+	de->name[5] = '\0';
+	s->blocks[FH_INDEX].fhs[0].size += 1; // increase number of valid files
     return true;
 }
 
@@ -196,7 +197,7 @@ DirEntry *find_entry(Self *s, char *name, u_int16_t *fileid){
 	for (int i = MST_DIR_ENTRIES; i < 50; i++) {
 		b = s->blocks + i;
 		for (int j = 0; j < ENTRY_PER_BLOCK; j++) {
-			if (strncmp(b->des[j].name, name, 6) == 0) {
+			if (strncmp(b->des[j].name, name, 5) == 0) {
 				*fileid = b->des[j].fileid;
 				return b->des + j;
 			}
@@ -245,6 +246,7 @@ static bool sf_remove(const SimpleFS *fs, char *name) {
 	clear_index_block(s, s->blocks + fh->index_block);
 	memset(fh, 0, sizeof(FileHeader)); // clear filheader
 	memset(de, 0, sizeof(DirEntry)); // clear entry
+	s->blocks[FH_INDEX].fhs[0].size -= 1;
     return true;
 }
 
@@ -300,7 +302,7 @@ static bool sf_read(const SimpleFS *fs, char *name, char *content) {
 	ret[0] = '\0';
 	for (int b = 0; b <= fh->size/BLOCK_SIZE; b++) {
 		data = s->blocks + ind->ind[b];
-		cpysize = (fh->size - (b*BLOCK_SIZE)) < 64 ? fh->size - (b*BLOCK_SIZE) : BLOCK_SIZE;
+		cpysize = (fh->size - (b*BLOCK_SIZE)) < BLOCK_SIZE ? fh->size - (b*BLOCK_SIZE) : BLOCK_SIZE;
 		strncat(ret, (char *)data->raw, cpysize);
 	}
 	strcpy(content, ret);
@@ -308,19 +310,76 @@ static bool sf_read(const SimpleFS *fs, char *name, char *content) {
 }
 
 static bool sf_list(const SimpleFS *fs, char *filenames) {
-    return false;
+	// list all files registered
+	Self *s = return_self(fs);
+	u_int16_t numfiles = s->blocks[FH_INDEX].fhs[0].size + 1;
+	unsigned long en = 0;
+	unsigned long entries = 0;
+	filenames[0] = '\0';
+	while(entries < numfiles){
+
+		if (s->blocks[MST_DIR_ENTRIES + (en/BLOCK_SIZE)].des[en % (ENTRY_PER_BLOCK)].name[0] != 0) {
+			strncat(filenames, s->blocks[MST_DIR_ENTRIES + (en/BLOCK_SIZE)].des[en % (ENTRY_PER_BLOCK)].name, 5);
+			strcat(filenames, ",");
+			entries++;
+		}
+		en++;
+	}
+	filenames[(numfiles * 6) - 1] = '\n';
+    return true;
+}
+
+unsigned long allocated_bytes(Self *s){
+	unsigned long all = 0;
+	unsigned int block;
+	for (int fh = 0; fh < (FH_PER_BLOCK * 16); fh++) {
+		block = fh/BLOCK_SIZE;	
+		if (s->blocks[block + FH_INDEX].fhs[fh - (block * FH_PER_BLOCK)].index_block != 0) {
+			all += s->blocks[block + FH_INDEX].fhs[fh - (block * FH_PER_BLOCK)].size;
+		}
+	}
+	return all;
 }
 
 static bool sf_info(const SimpleFS *fs, char *information) {
-    return false;
+	Self *s = return_self(fs);
+	unsigned long perc;
+	information[0] = '\0';
+	// returns information about the file system
+	char *copystr = (char *)malloc(BUFSIZ);
+	// number of valid files
+	sprintf(copystr, "Files: %d\n", s->blocks[FH_INDEX].fhs[0].size);
+	strcat(information, copystr);
+	// allocated bytes
+	sprintf(copystr, "Allocated: %ld\n", (perc = allocated_bytes(s)));
+	strcat(information, copystr);
+	// percentage used
+	sprintf(copystr, "Percent Used: %ld%%\n", (perc * 100) / s->file_size);
+	strcat(information, copystr);
+	free(copystr);
+	
+    return true;
 }
 
 static bool sf_dump(const SimpleFS *fs, char *dumpinfo) {
-    return false;
+	char *copystr = (char *)malloc(BUFSIZ);
+	Self *s = return_self(fs);
+	dumpinfo[0] = '\0';
+	// return info about the file headers
+	sprintf(copystr, "File Headers: %d\n", s->blocks[FH_INDEX].fhs[0].size);
+	strcat(dumpinfo, copystr);
+	free(copystr);
+    return true;
 }
 
 static bool sf_block(const SimpleFS *fs, int block, char *blockinfo) {
-    return false;
+	Self *s = return_self(fs);
+	blockinfo[0] = '\0';
+	// dump the contents of the block-th block
+	strcpy(blockinfo, (char *)s->blocks[block].raw);	
+	blockinfo[BLOCK_SIZE] = '\n';
+	blockinfo[BLOCK_SIZE+1] = '\0';
+    return true;
 }
 
 static const SimpleFS template = {
