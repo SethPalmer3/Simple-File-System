@@ -63,6 +63,9 @@ void get_char_arr(void *arr, int off, void *val, unsigned int len){
 	memcpy(val, (char*)arr + off, len);
 }
 
+bool is_whitespace(char l){
+	return l ==' ' || l == '\n' || l == '\t' || l == '\f' || l == '\r' || l == '\v' || l == 0;
+}
 
 typedef struct self {
     /* members you need in the instance-specific structure */
@@ -115,7 +118,9 @@ static void sf_init(const SimpleFS *fs) {
 	// set master directory entry
 	DirEntry master = {"(dir)\0", 0};
 	s->blocks[MST_DIR_ENTRIES].des[0] = master;
-	s->blocks[1].fhs[0].index_block = MST_INDEX_BLOCK;	
+	s->blocks[FH_INDEX].fhs[0].index_block = MST_INDEX_BLOCK;	
+	s->blocks[FH_INDEX].fhs[0].size = 1;	
+
 	// link blocks
 	for (unsigned long i = 50; i < (s->file_size/BLOCK_SIZE) - 1; i++) {
 		s->blocks[i].fbl.next_block = i + 1;
@@ -127,6 +132,7 @@ u_int16_t get_next_fbl(Self *s){
 	// Get the next free block avaliable to the file system
 	u_int16_t next_block = s->next_free;
 	s->next_free = s->blocks[s->next_free].fbl.next_block;
+
 	return next_block;
 }
 
@@ -168,27 +174,6 @@ DirEntry *find_empty_entry(Self*s, u_int16_t *fileid){
 	}
 	return NULL;
 }
-static bool sf_create(const SimpleFS *fs, char *name) {
-	// this creates a file in the file system
-	Self *s = return_self(fs);
-	FileHeader *fh;
-	DirEntry *de;
-	u_int16_t dir_fileid;
-	u_int16_t fh_fileid;
-	// find the next file header to allocate
-	fh = find_empty_fh(s, &fh_fileid);
-	de = find_empty_entry(s, &dir_fileid);
-	if (fh_fileid != dir_fileid) {
-		return false;
-	}
-	fh->index_block = get_next_fbl(s); // assign index block
-	de->fileid = fh_fileid; // set fileid in directory entry
-	memset(s->blocks + fh->index_block, 0, BLOCK_SIZE); // clear index block
-	memcpy(de->name, name, 5); // set name of directory entry
-	de->name[5] = '\0';
-	s->blocks[FH_INDEX].fhs[0].size += 1; // increase number of valid files
-    return true;
-}
 
 DirEntry *find_entry(Self *s, char *name, u_int16_t *fileid){
 
@@ -205,6 +190,35 @@ DirEntry *find_entry(Self *s, char *name, u_int16_t *fileid){
 	}
 	return NULL;
 }
+
+static bool sf_create(const SimpleFS *fs, char *name) {
+	// this creates a file in the file system
+	Self *s = return_self(fs);
+	FileHeader *fh;
+	DirEntry *de;
+	u_int16_t dir_fileid;
+	u_int16_t fh_fileid;
+	// find the next file header to allocate
+	if (find_entry(s, name, &dir_fileid) != NULL) {
+		return false;
+	}
+	if ((fh = find_empty_fh(s, &fh_fileid)) == NULL) {
+		return false;	
+	}
+	if ((de = find_empty_entry(s, &dir_fileid)) == NULL) {
+		return false;
+	}
+	if((fh->index_block = get_next_fbl(s)) == 0){
+		return false;
+	} // assign index block
+	de->fileid = fh_fileid; // set fileid in directory entry
+	memset(s->blocks + fh->index_block, 0, BLOCK_SIZE); // clear index block
+	memcpy(de->name, name, 5); // set name of directory entry
+	de->name[5] = '\0';
+	s->blocks[FH_INDEX].fhs[0].size += 1; // increase number of valid files
+    return true;
+}
+
 
 FileHeader *find_fh(Self *s, u_int16_t fileid){
 	u_int16_t blockid = fileid / BLOCK_SIZE;
@@ -271,7 +285,9 @@ static bool sf_write(const SimpleFS *fs, char *name, char *content) {
 
 	for (int b = 0; b <= (end - content)/BLOCK_SIZE; b++) {
 		if (ind->ind[b] == 0) {
-			new_data_id = get_next_fbl(s); // get a new data block
+			if((new_data_id = get_next_fbl(s)) == 0){
+				return false;
+			} // get a new data block
 			ind->ind[b] = new_data_id; // add the new data block location to the index block
 		}
 		data = s->blocks + ind->ind[b]; // get the data block
@@ -312,20 +328,19 @@ static bool sf_read(const SimpleFS *fs, char *name, char *content) {
 static bool sf_list(const SimpleFS *fs, char *filenames) {
 	// list all files registered
 	Self *s = return_self(fs);
-	u_int16_t numfiles = s->blocks[FH_INDEX].fhs[0].size + 1;
+	u_int16_t numfiles = s->blocks[FH_INDEX].fhs[0].size;
 	unsigned long en = 0;
 	unsigned long entries = 0;
 	filenames[0] = '\0';
-	while(entries < numfiles){
-
-		if (s->blocks[MST_DIR_ENTRIES + (en/BLOCK_SIZE)].des[en % (ENTRY_PER_BLOCK)].name[0] != 0) {
-			strncat(filenames, s->blocks[MST_DIR_ENTRIES + (en/BLOCK_SIZE)].des[en % (ENTRY_PER_BLOCK)].name, 5);
+	while(entries < numfiles && en/ENTRY_PER_BLOCK < 32){
+		if (!is_whitespace(s->blocks[MST_DIR_ENTRIES + (en/ENTRY_PER_BLOCK)].des[en % (ENTRY_PER_BLOCK)].name[0])) {
+			strncat(filenames, s->blocks[MST_DIR_ENTRIES + (en/ENTRY_PER_BLOCK)].des[en % (ENTRY_PER_BLOCK)].name, 5);
 			strcat(filenames, ",");
 			entries++;
 		}
 		en++;
 	}
-	filenames[(numfiles * 6) - 1] = '\n';
+	filenames[strlen(filenames)-1] = '\n';
     return true;
 }
 
@@ -376,7 +391,7 @@ static bool sf_block(const SimpleFS *fs, int block, char *blockinfo) {
 	Self *s = return_self(fs);
 	blockinfo[0] = '\0';
 	// dump the contents of the block-th block
-	strcpy(blockinfo, (char *)s->blocks[block].raw);	
+	memcpy(blockinfo, s->blocks[block].raw, BLOCK_SIZE);
 	blockinfo[BLOCK_SIZE] = '\n';
 	blockinfo[BLOCK_SIZE+1] = '\0';
     return true;
