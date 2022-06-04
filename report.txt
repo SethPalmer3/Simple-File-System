@@ -1,0 +1,1 @@
+The program seems to be at least working with all the functions in the ADT, though the block function might be off however it does seem to give the contents of the block. There were no perceived memory leaks when testing the functions.

@@ -8,3 +8,6 @@ simplefs.o: simplefs.c simplefs.h
 
 clean:
 	rm -f *.o fsappl
+
+zip:
+	tar -cvzf spalmer2-project4.tgz simplefs.c report.txt

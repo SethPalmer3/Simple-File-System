@@ -199,6 +199,9 @@ static bool sf_create(const SimpleFS *fs, char *name) {
 	u_int16_t dir_fileid;
 	u_int16_t fh_fileid;
 	// find the next file header to allocate
+	if (strlen(name) > 5) {
+		return false;
+	}
 	if (find_entry(s, name, &dir_fileid) != NULL) {
 		return false;
 	}
@@ -271,6 +274,9 @@ static bool sf_write(const SimpleFS *fs, char *name, char *content) {
 	FileHeader *fh;
 	u_int16_t fileid;
 	unsigned long cpysize;
+	if (strlen(content) > 2048) { // check if the length of data is appropriate
+		return false;
+	}
 	if((en = find_entry(s, name, &fileid)) == NULL){ // get the directory entry
 		return false;
 	}
